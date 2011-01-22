@@ -1,0 +1,94 @@
+Vimpl
+
+Vimpl is meant to be a simple script to manage Vim plugins with Git and
+Pathogen.vim.  Plugins are scraped from the excellent http://vim-scripts.org
+list of mirrors and installed as git submodules in $HOME/.vim/bundle/
+
+USAGE
+
+vimpl [--update] <command> [<args>]
+
+Commands:
+	init - Initializes a git repo in your $HOME/.vim folder and installs Pathogen.vim
+		as a git submodule.
+
+	restore <gitrepo> - Clones the provided git repository into $HOME/.vim
+		Initializes all git submodules and updates all submodules.
+
+	search <vim plugins>... - Provides a list of matching plugins found on vim-scripts.org
+		for each name provided.
+
+	install <vim plugins>... - Installs provided Vim plugin names as git submodules
+		From their respective vim-scripts.org mirrors.
+
+	list - Lists the installed Vim plugins (omits Pathogen.vim from this list)
+
+	remove <vim plugins>... - Removes provided Vim plugins.  Must match the names
+		in 'list'.
+
+	pull [config|plugin|all] - Does a 'git pull origin master' for either the remote
+		for the $HOME/.vim repo , git submodules or both.  If not specified, plugins only.
+
+	update - Updates the local list of plugin mirrors from vim-scripts.org.  Prefacing
+		any command with '--update' will trigger an update before the command is processed.
+
+	backup - If the $HOME/.vim repo already has a remote origin,
+		'backup' will push to it.
+
+		backup github <name> [public|private] - Vimpl will attempt to create a repo for you
+			on GitHub <name> using credentials in your $HOME/.gitconfig .  Vimpl will then push your
+			.vim config to the fresh repo.
+
+		backup <gitrepo> - Vimpl will attempt to set the provided repo as the remote origin
+			$HOME/.vim and push to it.
+
+INSTALLATION
+
+To install this module from source or tarball, run the following commands:
+
+	perl Makefile.PL
+	make
+	make test
+	make install
+
+
+To install this module from CPAN:
+
+	perl -MCPAN -e 'install Vimpl'
+
+	or
+
+	cpanm Vimpl
+
+SUPPORT AND DOCUMENTATION
+
+After installing, you can find documentation for this module with the
+perldoc command.
+
+    perldoc Vimpl
+
+You can also look for information at:
+
+    Vimpl's GitHub page
+        https://github.com/moshen/Vimpl
+
+    AnnoCPAN, Annotated CPAN documentation
+        http://annocpan.org/dist/Vimpl
+
+    CPAN Ratings
+        http://cpanratings.perl.org/d/Vimpl
+
+    Search CPAN
+        http://search.cpan.org/dist/Vimpl/
+
+
+LICENSE AND COPYRIGHT
+
+Copyright (C) 2011 Colin Kennedy
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of either: the GNU General Public License as published
+by the Free Software Foundation; or the Artistic License.
+
+See http://dev.perl.org/licenses/ for more information.
+

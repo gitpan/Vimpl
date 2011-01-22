@@ -1,0 +1,654 @@
+#!/usr/bin/env perl
+
+
+use v5.10;
+
+use Web::Scraper;
+use LWP::UserAgent;
+use Data::Dumper;
+use JSON::XS;
+use Getopt::Long;
+use File::Path;
+use feature "switch";
+use Config::IniFiles;
+use MIME::Base64;
+use Pod::Usage;
+
+
+use warnings;
+use strict;
+
+my $json = JSON::XS->new->ascii->pretty;
+my $agent = LWP::UserAgent->new();
+
+
+my $git_binary = `which git`;
+if(!$git_binary){
+	die "Git doesn't seem to be in the \$PATH\n";
+}
+
+my $vim_dir = $ENV{HOME} . '/.vim/';
+
+sub vimpl_init {
+	if(! -d $vim_dir){
+		mkdir($vim_dir) or die "\nCan't create .vim in " . $ENV{HOME} . " are you sure everything's okay?\n";
+	}
+
+	chdir($vim_dir);
+
+	if(! -d "bundle"){ mkdir("bundle"); }
+	if(! -d "autoload"){ mkdir("autoload"); }
+
+	if( scalar(grep($_ =~ /^\s?[AM]/, `git status --porcelain`)) > 0){
+		print "\nAn exsisting and unclean git repository was found in $vim_dir." .
+			"\n\tPlease commit or remove the pending changes before proceeding.\n";
+		exit 1;
+	}
+	if($? == 0){
+		print "\nAn exsisting git repository was found in $vim_dir.\n\tI will try to use it, but I thought I would warn you.\n";
+	} else {
+
+		if( system("git init") != 0 ){
+			die "\nThere was a problem creating a git repository in $vim_dir.\n";
+		}
+	}
+
+	if(-f "autoload/pathogen.vim"){ unlink("autoload/pathogen.vim"); }
+
+	if(system("git submodule add git://github.com/vim-scripts/pathogen.vim.git pathogen.vim") == 0){
+		symlink("../pathogen.vim/plugin/pathogen.vim", "autoload/pathogen.vim") or
+			die "\nCan't symlink pathogen.vim into .vim/autoload.\n";
+	} else {
+		die "\nFailed to add pathogen as a submodule.";
+	}
+
+	print "\n";
+
+	vimpl_update_vim_scripts();
+	# TODO : write out a default .gitignore file (if there isn't one) and add it to the repo as well.
+	if(system("git add autoload") == 0 ){
+		if( system("git commit -m 'Initialized a new vimpl config, installed pathogen.vim'") == 0 ){
+			print "\n\tSuccessfully initialized a new vimpl repo.\n\tTry installing some vim scripts.\n\n";
+		}else{
+			die "\nProblem committing new changes while initializing a vimpl git repo.\n";
+		}
+	}else{
+		die "\nProblem committing new changes while initializing a vimpl git repo.\n";
+	}
+
+}
+
+sub vimpl_backup {
+	my $upper_args = shift;
+	my $has_origin = 0;
+
+	my @git_remote_list = grep($_ =~ /^origin\s+.+\.git\s+\(push\)$/, `git remote -v`);
+	if( scalar(@git_remote_list) > 0 ){
+		$has_origin = 1;
+
+		print "\tBacking up to existing origin:\n\t $git_remote_list[0]\n";
+	}
+
+	if( defined( $upper_args->[0] ) && $has_origin == 0 ){
+		
+		# GitHub repo check and creation
+		given($upper_args->[0]){
+			when ('github') {
+				unless( defined( $upper_args->[1] )){
+					print "\n\tPlease provide a repo name.\n";
+					exit 1;
+				}
+				if( -f $ENV{HOME} . "/.gitconfig" ){
+					my $gitconfig = Config::IniFiles->new( -file => $ENV{HOME} . "/.gitconfig" );
+					if( $gitconfig->val('github', 'user') && $gitconfig->val('github', 'token') ){
+						my $user = $gitconfig->val('github', 'user');
+						my $token = $gitconfig->val('github', 'token');
+						print "\tUsing GitHub user: $user to create a repository.\n";
+		
+						$agent->default_header("Authorization" => "Basic " . encode_base64("$user/token:$token"));
+	
+						my $repolist = decode_json($agent->get("https://github.com/api/v2/json/repos/show/$user")->content()) or
+							die "\nCouldn't fetch repo list for $user from GitHub.\n";
+	
+						if( $repolist->{repositories} ){
+							if( scalar( grep( $_->{name} eq $upper_args->[1], @{$repolist->{repositories}} )) > 0 ){
+								print "\tThere is an exsisting repository on GitHub called: " . $upper_args->[1] .
+									"\n\tPlease use another name.\n";
+								exit 1;
+							} else {
+								my $public;
+								if( defined($upper_args->[2]) ){
+									$public = $upper_args->[2] eq "public" ? 1 : 0;
+								} else {
+									$public = 1;
+								}
+								my $create_response = decode_json($agent->post("https://github.com/api/v2/json/repos/create", {
+																									"name" => $upper_args->[1], 
+																									"description" => "My Vim config",
+																									"public" => $public } )->content()) or
+									die "\nError creating repo " . $upper_args->[1] . " on GitHub\n";
+	
+								if( $create_response->{repository} ){
+									print "\tSuccessfully created repository: " . $create_response->{repository}->{name} . " on GitHub.\n";
+									if( system( "git remote add origin git\@github.com:$user/" . $create_response->{repository}->{name} . ".git" ) == 0){
+										print "\tSuccessfully added your GitHub repo as the remote origin.\n\n";
+									} else {
+										print "\n\tThere was a problem adding your GitHub repository as the repo origin\n";
+										exit 1;
+									}
+								} else {
+									print "\n\tFailed to create a GitHub repo for you. Are you sure your credentials are correct in .gitconfig?\n";
+									exit 1;
+								}
+								
+									
+							}
+						}
+	
+			
+						$has_origin = 1;
+					} else {
+						print "\tNo .gitconfig file found in " . $ENV{HOME} . "\n" . 
+							"\tVimpl reads your stored github user and token from your .gitconfig file.\n" .
+							"\tIf you're an avid git user you should probably have one.\n\n";
+						exit 1;
+					}
+				}
+			}
+			when (/[a-zA-Z0-9_\-@.\/:]+\.git/) {
+				if( system("git remote add origin " . $upper_args->[0] ) == 0 ){
+					print "\tAdded remote origin successfully\n";
+					$has_origin = 1;
+				} else {
+					die "\nProblem adding remote origin: " . $upper_args->[0] . "\n";
+				}
+			}
+		}
+	}
+
+	if( $has_origin ){
+		if( system("git push origin master") == 0 ){
+			print "\n\tVim configuration backed up successfully.\n";
+		} else {
+			die "\nProblem pushing to remote origin\n";
+		}
+	}
+}
+
+sub vimpl_restore {
+	my $upper_args = shift; # Hashref, probably should check
+	
+	if( -d $vim_dir ){
+		print "\n\t$vim_dir already exists!\n";
+		exit 1;
+	}
+
+	if( system( "git clone " . $upper_args->[0] . " $vim_dir" ) == 0 ){
+		chdir($vim_dir);
+		if( system( "git submodule init" ) == 0 ){
+			if( system( "git submodule update" ) == 0 ){
+				print "\n\tVim configuration successfully restored.\n";
+			} else {
+				die "\nFailed to update git submodules in $vim_dir.\n";
+			}
+		} else {
+			die "\nFailed to initialize git submodules in $vim_dir.\n";
+		}
+	} else {
+		die "\nFailed to clone your backup repo into $vim_dir.\n";
+	}
+				
+}
+
+sub vimpl_install_git_submodule {
+	my $mods_to_install = shift; # Should be an array ref
+	my $modules = vimpl_get_submodule_list();
+	my $scripts = vimpl_get_vim_scripts();
+
+	my $filt = sub {
+		my ($mod, $ins) = @_;
+		if($mod->{script_text}->[2] eq $ins){
+			return 1;
+		}
+		
+		if($mod->{script_repo} eq $ins){
+			return 1;
+		}else{
+			return 0;
+		}
+	};
+
+	my @to_be_installed;
+	foreach my $mod (@{$mods_to_install}){
+		my @found = grep( $_ eq $mod, @{$modules->{list}} );
+		if(scalar(@found) > 0){
+			print "\t$mod is already installed.\n";
+			next;
+		}
+
+		push(@to_be_installed, grep($filt->($_, $mod), @{$scripts->{scripts}}));
+	}
+
+	if(@to_be_installed){
+		my @installed;
+		my @problem_mods;
+		foreach my $mod_install (@to_be_installed){
+			print "\n";
+			if( system("git submodule add " . $mod_install->{script_url} . " bundle/" . $mod_install->{script_repo}) == 0 ){
+				push(@installed, $mod_install->{script_repo});
+			}else{
+				push(@problem_mods, $mod_install->{script_repo});
+			}
+		}
+		print "\n";
+
+		if( system("git commit -m 'Installed submodule(s) " . join(", ", @installed) . "'") == 0 ){
+			print "\n\tSuccessfully installed " . join(", ", @installed) . "\n";
+		}else{
+			die "\nProblem committing new changes while installing submodules.\n";
+		}
+
+		if(@problem_mods){
+			print "\n\tThere was a problem installing: " . join(", ", @problem_mods) . "\n";
+		}
+	}
+}
+
+sub vimpl_pull_update {
+	my $upper_args = shift; # Hashref again
+
+	unless(defined($upper_args->[0])){
+		$upper_args->[0] = 'plugin';
+	}
+
+	given($upper_args->[0]){
+		when (/config|remote/) {
+			vimpl_pull_config();
+		}
+		when (/plugin(s)?/) {
+			vimpl_pull_git_submodules();
+		}
+		when ('all') {
+			vimpl_pull_config();
+			vimpl_pull_git_submodules();
+		}
+	}
+}
+
+sub vimpl_pull_config {
+	if( scalar(grep($_ =~ /^origin\s+.+\.git\s+\(push\)$/, `git remote -v`)) > 0 ){
+		if( system( "git pull origin master" ) > 0 ){
+			die "\nFailed to pull from remote origin.\n";
+		}
+	}
+}
+
+sub vimpl_pull_git_submodules {
+	if( system("git submodule foreach 'git pull origin master'") > 0 ){
+		die "\nThere was a problem pulling updates for your installed scripts\n";
+	}
+}
+
+sub vimpl_remove_git_submodule {
+	my $mods_to_remove = shift; # Should be an array ref
+	my $modules = vimpl_get_submodule_list();
+
+	my $count = 0;
+	my @removing;
+
+	open(OUT, ">.gitmodules");
+	while( $count < scalar(@{$modules->{text}}) ){
+		my @found = grep( $modules->{text}->[$count] =~ /^\[submodule "bundle\/$_"\]/, @{$mods_to_remove});
+		if(scalar(@found) > 0 ){
+			$count += 3;
+			print "\tRemoving " . $found[0] . " from .gitmodules\n";
+			push(@removing, "bundle/" . $found[0]);
+		} else {
+			print OUT $modules->{text}->[$count];
+			$count += 1;
+		}
+	}
+
+	close(OUT);
+
+	if( scalar(@removing) > 0 ){
+		my @problem_mods = ();
+		my @successful_mods = ();
+		foreach my $rem_mod (@removing){
+			if( system("git rm --cached $rem_mod") == 0 ){
+				print "\tRemoved $rem_mod from git cache\n";
+				rmtree($rem_mod);
+				print "\tRemoved $rem_mod from the file system\n";
+
+				$rem_mod =~ s/^bundle\///;
+				push(@successful_mods, $rem_mod);
+			} else {
+				print "\tThere was a problem removing the git cache for $rem_mod\n" .
+					"\tSkipping the removal process of the directory " . $vim_dir . $rem_mod . "\n";
+
+				$rem_mod =~ s/^bundle\///;
+				push(@problem_mods, $rem_mod);
+			}
+		}
+	
+			if(system("git add .gitmodules") == 0 ){
+				if( system("git commit -m 'Removed submodule(s) " . join(", ", @successful_mods) . "'") == 0 ){
+					print "\n\tSuccessfully removed " . join(", ", @successful_mods) . "\n";
+				}
+			}
+
+			if( scalar(@problem_mods) > 0 ){
+				print "\tThere were issues removing " . join(", ", @problem_mods) . "\n";
+			}
+	} else {
+		print "\tNothing found to remove.\n";
+	}
+	
+}
+
+sub vimpl_search_vim_scripts {
+	my $mods_to_search = shift; # Should be an array ref
+
+	my $filt = sub {
+		my ($mod_to_search, $script) = @_;
+
+		if( $mod_to_search =~ /^\d+$/ ){
+			##
+		}
+
+		if( $script->{script_text}->[2] =~ /$mod_to_search/ig ){
+			return 1;
+		}
+
+		if( $script->{script_repo} =~ /$mod_to_search/ig ){
+			return 1;
+		}else{
+			return 0;
+		}
+	};
+	my $scripts = vimpl_get_vim_scripts();
+
+	foreach my $mod_to_search (@{$mods_to_search}){
+		my @results = grep($filt->($mod_to_search, $_), @{$scripts->{scripts}});
+		print "For query: $mod_to_search , found:\n";
+		map { print "\t" . $_->{script_repo} . "\n"; } @results;
+		print "\n";
+	}
+}
+
+sub vimpl_get_submodule_list {
+	my $modules = {};
+	open(MODULES, "<.gitmodules");
+	@{$modules->{text}} = <MODULES>;
+	close(MODULES);
+
+	$modules->{list} = ();
+	foreach my $line (@{$modules->{text}}){
+		if( $line =~ /^\[submodule "bundle\/(.+)"\]/ ){
+			push(@{$modules->{list}}, $1);
+		}
+	}
+
+	return $modules;
+}
+
+sub vimpl_update_vim_scripts {
+	my $vim_scripts_scraper = scraper {
+		process "tr", "scripts[]" => scraper {
+			process "td", "script_text[]" => 'TEXT';
+			process "a", "script_url" => sub { # Convert provided URLs to git:// urls
+				my $url = $_->attr('href');
+				$url =~ s/^http/git/;
+				return $url . '.git';
+			};
+			# Grab the repo name from the provided URLs
+			process "a", "script_repo" => sub { return ($_->attr('href') =~ /\/([^\/]+)$/)[0]; };
+		};
+	};
+
+	my $scripts_page = $agent->get('http://vim-scripts.org/vim/scripts.html')->content();
+
+	unless($scripts_page){
+		die "Could not fetch scripts list from vim-scripts.org\n";
+	}
+
+	my $scripts = $vim_scripts_scraper->scrape($scripts_page);
+
+	open OUT, ">vim-scripts.json"
+		or die "Could not write out vim-scripts.json list in $vim_dir";
+	print OUT $json->encode($scripts);
+	close OUT;
+}
+
+sub vimpl_get_vim_scripts {
+	my $scripts = "";
+
+	if(-f "vim-scripts.json"){
+		open IN, "<vim-scripts.json";
+		$scripts = decode_json(join("",<IN>)); # Probably shouldn't be sluuuurping here
+		close IN;
+	}else{
+		die "\nvim-scripts.json not found in $vim_dir , try running vimpl update.\n";
+	}
+
+	return $scripts;
+}
+
+my $update = 0;
+my $long_options = GetOptions (
+														   "update" => \$update,
+																							 );
+
+my $command = shift @ARGV;
+if(! $command){
+	pod2usage(1);
+}
+
+# There has to be a .vim dir and git repo before we can do anything else
+given($command){
+	when ('help') { pod2usage(1); }
+	when ('init') { vimpl_init(); exit 0; }
+	when ('restore') { vimpl_restore(\@ARGV); exit 0; }
+}
+
+if( ! -d $vim_dir ){
+	die "No .vim directory found in " . $ENV{HOME} . ".\n\tMaybe you should try 'vimpl init' or 'vimpl restore'\n";
+}
+chdir($vim_dir);
+
+if( scalar(grep($_ =~ /^\s?[AM]/, `git status --porcelain`)) > 0){
+	print "\nAn unclean git repository was found in $vim_dir.\n\tPlease commit or remove the pending changes before proceeding.\n";
+	exit 1;
+}
+if( $? != 0 ){
+	die "No git repository found in " . $vim_dir . ".\n\tMaybe you should try 'vimpl init' or 'vimpl restore'\n";
+}
+
+
+# Options that can preface any command
+if($update){
+	vimpl_update_vim_scripts();
+}
+
+# Main command list
+given($command){
+	when ('update') {
+		vimpl_update_vim_scripts();
+
+		exit 0;
+	}
+	when ('list') {
+		my $modules = vimpl_get_submodule_list();
+	
+		foreach my $module (sort(@{$modules->{list}})){
+			print "\t$module\n";
+		}
+		print "\n";
+	
+		exit 0;
+	}
+	when (/backup|push/) {
+		vimpl_backup(\@ARGV);
+
+		exit 0;
+	}
+	when ('install') {
+		vimpl_install_git_submodule(\@ARGV);
+	
+		exit 0;
+	}
+	when (/pull|upgrade/) {
+		vimpl_pull_update(\@ARGV);
+
+		exit 0;
+	}
+	when (/remove|uninstall/) {
+		vimpl_remove_git_submodule(\@ARGV);
+		print "\n";
+	
+		exit 0;
+	}
+	when (/search|find/) {
+		vimpl_search_vim_scripts(\@ARGV);
+		exit 0;
+	}
+	default {
+		pod2usage(1);
+	}
+}
+
+
+pod2usage(1);
+
+
+
+
+=head1 NAME
+
+Vimpl - For managing your Vim config with Git.
+
+=head1 VERSION
+
+Version 0.01
+
+=cut
+
+our $VERSION = '0.01';
+
+
+=head1 SYNOPSIS
+
+Use Vimpl to manage your Vim plugins with Git and mirrors listed on Vim-scripts.org
+
+vimpl [--update] <command> [<args>]
+
+Commands:
+	
+	init - Initializes a git repo in your $HOME/.vim folder and installs 
+		Pathogen.vim as a git submodule.
+
+	restore <gitrepo> - Clones the provided git repository into $HOME/.vim
+		Initializes all git submodules and updates all submodules.
+
+	search <vim plugins>... - Provides a list of matching plugins found
+		on vim-scripts.org for each name provided.
+
+	install <vim plugins>... - Installs provided Vim plugin names as
+		git submodules from their respective vim-scripts.org mirrors.
+
+	list - Lists the installed Vim plugins (omits Pathogen.vim from
+		the list)
+
+	remove <vim plugins>... - Removes provided Vim plugins.
+		Must match the names in 'list'.
+
+	pull [config|plugin|all] - Does a 'git pull origin master' for either
+		the remote for the $HOME/.vim repo , git submodules or both.
+		If not specified, plugins only.
+
+	update - Updates the local list of plugin mirrors from vim-scripts.org.
+		Prefacing any command with '--update' will trigger an update before
+		the command is processed.
+
+	backup - If the $HOME/.vim repo already has a remote origin,
+		'backup' will push to it.
+
+		backup github <name> [public|private] - Vimpl will attempt to
+			create a repo for you on GitHub <name> using credentials in your
+			$HOME/.gitconfig .  Vimpl will then push your .vim config to
+			the fresh repo.
+
+		backup <gitrepo> - Vimpl will attempt to set the provided repo as
+			the remote origin in $HOME/.vim and push to it.
+
+=head1 EXAMPLES
+
+$ vimpl init
+
+$ vimpl install SelectBuf SuperTab The-NERD-tree Wombat
+
+$ vimpl pull plugins
+
+
+=head1 AUTHOR
+
+Colin Kennedy, C<< <moshen.colin at gmail.com> >>
+
+=head1 BUGS
+
+Please report any bugs or feature requests through the web interface at 
+L<https://github.com/moshen/Vimpl/Issues>.  I will be notified, and 
+then you'll automatically be notified of progress on your bug as I make changes.
+
+
+
+
+=head1 SUPPORT
+
+You can find documentation for this module with the perldoc command.
+
+    perldoc Vimpl
+
+
+You can also look for information at:
+
+=over 4
+
+=item * Vimpl's GitHub page
+
+L<https://github.com/moshen/Vimpl>
+
+=item * AnnoCPAN: Annotated CPAN documentation
+
+L<http://annocpan.org/dist/Vimpl>
+
+=item * CPAN Ratings
+
+L<http://cpanratings.perl.org/d/Vimpl>
+
+=item * Search CPAN
+
+L<http://search.cpan.org/dist/Vimpl/>
+
+=back
+
+
+=head1 ACKNOWLEDGEMENTS
+
+The inspiring GitHub script mirrors at L<http://vim-scripts.org>.
+
+
+=head1 LICENSE AND COPYRIGHT
+
+Copyright 2011 Colin Kennedy.
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of either: the GNU General Public License as published
+by the Free Software Foundation; or the Artistic License.
+
+See http://dev.perl.org/licenses/ for more information.
+
+
+=cut
+
+

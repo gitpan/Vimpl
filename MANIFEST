@@ -1,0 +1,10 @@
+Changes
+MANIFEST
+Makefile.PL
+README
+bin/vimpl
+t/00-os.t
+t/manifest.t
+t/pod-coverage.t
+t/pod.t
+META.yml                                 Module meta-data (added by MakeMaker)
