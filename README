@@ -6,7 +6,7 @@ list of mirrors and installed as git submodules in $HOME/.vim/bundle/
 
 USAGE
 
-vimpl [--update] <command> [<args>]
+vimpl <command> [<args>]
 
 Commands:
 	init - Initializes a git repo in your $HOME/.vim folder and installs Pathogen.vim
@@ -29,8 +29,7 @@ Commands:
 	pull [config|plugin|all] - Does a 'git pull origin master' for either the remote
 		for the $HOME/.vim repo , git submodules or both.  If not specified, plugins only.
 
-	update - Updates the local list of plugin mirrors from vim-scripts.org.  Prefacing
-		any command with '--update' will trigger an update before the command is processed.
+	update - Updates the local list of plugin mirrors from vim-scripts.org.
 
 	backup - If the $HOME/.vim repo already has a remote origin,
 		'backup' will push to it.

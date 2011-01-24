@@ -7,8 +7,8 @@ use Web::Scraper;
 use LWP::UserAgent;
 use Data::Dumper;
 use JSON::XS;
-use Getopt::Long;
 use File::Path;
+use File::Copy;
 use feature "switch";
 use Config::IniFiles;
 use MIME::Base64;
@@ -22,6 +22,7 @@ my $json = JSON::XS->new->ascii->pretty;
 my $agent = LWP::UserAgent->new();
 
 
+# TODO: Implementing Windows/Cross platform compatibility starts here
 my $git_binary = `which git`;
 if(!$git_binary){
 	die "Git doesn't seem to be in the \$PATH\n";
@@ -45,7 +46,8 @@ sub vimpl_init {
 		exit 1;
 	}
 	if($? == 0){
-		print "\nAn exsisting git repository was found in $vim_dir.\n\tI will try to use it, but I thought I would warn you.\n";
+		print "\nAn exsisting git repository was found in $vim_dir." .
+			"\n\tI will try to use it, but I thought I would warn you.\n";
 	} else {
 
 		if( system("git init") != 0 ){
@@ -62,11 +64,51 @@ sub vimpl_init {
 		die "\nFailed to add pathogen as a submodule.";
 	}
 
+	
+	# Check and include the .vimrc file in $ENV{HOME}/.vim/
+	my @vimrc = (
+		"filetype off\n",
+		"call pathogen#helptags()\n",
+		"call pathogen#runtime_append_all_bundles()\n"
+	);
+  if( -f $ENV{HOME} . "/.vimrc" ){
+		open(VIMRC, "<" . $ENV{HOME} . "/.vimrc");
+		my @vimrc_old = <VIMRC>;
+		close(VIMRC);
+
+		if( scalar(grep($_ =~ /call\s+pathogen/i, @vimrc_old)) > 1 ){
+			print "\n\tFound pathogen.vim config in .vimrc\n";
+			@vimrc = @vimrc_old;
+		} else {
+			print "\n\tDid not find pathogen.vim config in .vimrc\n";
+			push(@vimrc , @vimrc_old);
+		}
+
+		my $vimrc_backup = $ENV{HOME} . "/.vimrc.backup" . time();
+		move($ENV{HOME} . "/.vimrc" , $vimrc_backup);
+
+		print "\n\tBacking up your .vimrc file to " . $vimrc_backup . "\n";
+	}
+
+	if( -f "$vim_dir.vimrc" ){
+		move( "$vim_dir.vimrc", "$vim_dir.vimrc.backup" . time());
+	}
+	open(VIMRC, ">$vim_dir" . ".vimrc");
+	foreach my $line (@vimrc){
+		print VIMRC $line;
+	}
+	close(VIMRC);
+
+	symlink(".vim/.vimrc", "../.vimrc");
+
+
 	print "\n";
 
+	print "\n\tGetting the latest list of Vim scripts mirrors from vim-scripts.org\n";
 	vimpl_update_vim_scripts();
+
 	# TODO : write out a default .gitignore file (if there isn't one) and add it to the repo as well.
-	if(system("git add autoload") == 0 ){
+	if(system("git add autoload .vimrc") == 0 ){
 		if( system("git commit -m 'Initialized a new vimpl config, installed pathogen.vim'") == 0 ){
 			print "\n\tSuccessfully initialized a new vimpl repo.\n\tTry installing some vim scripts.\n\n";
 		}else{
@@ -207,6 +249,13 @@ sub vimpl_install_git_submodule {
 
 	my $filt = sub {
 		my ($mod, $ins) = @_;
+		
+		if( $ins =~ /^\d+$/ ){
+			if( $mod->{script_text}->[0] == $ins ){
+				return 1;
+			}
+		}
+
 		if($mod->{script_text}->[2] eq $ins){
 			return 1;
 		}
@@ -276,6 +325,7 @@ sub vimpl_pull_update {
 }
 
 sub vimpl_pull_config {
+	# Need to make sure that there is a remote origin here
 	if( scalar(grep($_ =~ /^origin\s+.+\.git\s+\(push\)$/, `git remote -v`)) > 0 ){
 		if( system( "git pull origin master" ) > 0 ){
 			die "\nFailed to pull from remote origin.\n";
@@ -353,7 +403,9 @@ sub vimpl_search_vim_scripts {
 		my ($mod_to_search, $script) = @_;
 
 		if( $mod_to_search =~ /^\d+$/ ){
-			##
+			if( $script->{script_text}->[0] == $mod_to_search ){
+				return 1;
+			}
 		}
 
 		if( $script->{script_text}->[2] =~ /$mod_to_search/ig ){
@@ -434,10 +486,6 @@ sub vimpl_get_vim_scripts {
 	return $scripts;
 }
 
-my $update = 0;
-my $long_options = GetOptions (
-														   "update" => \$update,
-																							 );
 
 my $command = shift @ARGV;
 if(! $command){
@@ -464,11 +512,6 @@ if( $? != 0 ){
 	die "No git repository found in " . $vim_dir . ".\n\tMaybe you should try 'vimpl init' or 'vimpl restore'\n";
 }
 
-
-# Options that can preface any command
-if($update){
-	vimpl_update_vim_scripts();
-}
 
 # Main command list
 given($command){
@@ -525,22 +568,22 @@ pod2usage(1);
 
 =head1 NAME
 
-Vimpl - For managing your Vim config with Git.
+Vimpl - For managing your Vim scripts with Pathogen.vim and Git.
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 =cut
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 
 =head1 SYNOPSIS
 
-Use Vimpl to manage your Vim plugins with Git and mirrors listed on Vim-scripts.org
+Use Vimpl to manage your Vim scripts with Git and mirrors listed on Vim-scripts.org
 
-vimpl [--update] <command> [<args>]
+	vimpl <command> [<args>]
 
 Commands:
 	
@@ -567,8 +610,6 @@ Commands:
 		If not specified, plugins only.
 
 	update - Updates the local list of plugin mirrors from vim-scripts.org.
-		Prefacing any command with '--update' will trigger an update before
-		the command is processed.
 
 	backup - If the $HOME/.vim repo already has a remote origin,
 		'backup' will push to it.
@@ -581,26 +622,24 @@ Commands:
 		backup <gitrepo> - Vimpl will attempt to set the provided repo as
 			the remote origin in $HOME/.vim and push to it.
 
-=head1 EXAMPLES
+=head1 USAGE EXAMPLES
 
-$ vimpl init
-
-$ vimpl install SelectBuf SuperTab The-NERD-tree Wombat
-
-$ vimpl pull plugins
+	$ vimpl init
+	
+	$ vimpl install SelectBuf SuperTab The-NERD-tree Wombat
+	
+	$ vimpl pull plugins
 
 
 =head1 AUTHOR
 
-Colin Kennedy, C<< <moshen.colin at gmail.com> >>
+Colin Kennedy, C<< <moshen at cpan.org> >>
 
 =head1 BUGS
 
 Please report any bugs or feature requests through the web interface at 
 L<https://github.com/moshen/Vimpl/Issues>.  I will be notified, and 
 then you'll automatically be notified of progress on your bug as I make changes.
-
-
 
 
 =head1 SUPPORT

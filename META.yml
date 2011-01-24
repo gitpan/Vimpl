@@ -1,9 +1,9 @@
 --- #YAML:1.0
 name:               Vimpl
-version:            0.01
-abstract:           For managing your Vim config with Git.
+version:            0.02
+abstract:           For managing your Vim scripts with Pathogen.vim and Git.
 author:
-    - Colin Kennedy <moshen.colin@gmail.com>
+    - Colin Kennedy <moshen@cpan.org>
 license:            perl
 distribution_type:  module
 configure_requires:
@@ -13,8 +13,8 @@ build_requires:
 requires:
     Config::IniFiles:  0
     Data::Dumper:      0
+    File::Copy:        0
     File::Path:        0
-    Getopt::Long:      0
     JSON::XS:          0
     LWP::UserAgent:    0
     MIME::Base64:      0
